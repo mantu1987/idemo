@@ -1,0 +1,237 @@
+function WebRTCPeer() {
+    var self = this;
+    var config={localVideo:'video#localVideo',remoteVideo:"video#remoteVideo"};
+    var connection = null;
+    var localMediaStream = null;
+    var remoteMediaStream = null;
+    var servers = null;
+    var pcConstraint = null;
+    var sendDataChannel = null;
+    var dataConstraint = null;
+    var receiveDataChannel = null;
+    //to check All info is gethered or not
+    var isIceCandidateProcessed = false;
+    var deferedMedia = null;
+    this.getUserMedia = function(hasVideo) {
+        deferedMedia = $.Deferred();
+        window.navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: Boolean(hasVideo)
+            })
+            .then(self.onGetLocalStream)
+            .catch(function(e) {
+                deferedMedia.reject();
+            });
+        return deferedMedia.promise();
+    }
+
+    this.createPeerConnection = function() {
+        connection = new RTCPeerConnection(servers, pcConstraint);
+        connection.onaddstream = self.onGetRemoteStream;
+        sendDataChannel = connection.createDataChannel('sendDataChannel', dataConstraint);
+        sendDataChannel.onopen = onSendChannelStateChange;
+        sendDataChannel.onclose = onSendChannelStateChange;
+        localMediaStream && connection.addStream(localMediaStream);
+        connection.ondatachannel = receiveChannelCallback;
+        connection.onicecandidate = iceCallback;
+       /*  peerconnection.onnegotiationneeded =function(){
+            console.log('re onnegotiationneeded()');
+        };*/
+    }
+
+    //On get local media stream audio/video
+    this.onGetLocalStream = function(stream) {
+       if(localMediaStream)
+        {
+            var localVideo = document.querySelector(config.localVideo);
+           // connection.removeStream(localMediaStream);
+            connection.getLocalStreams().forEach(function(item) {
+                console.log(item)
+                connection.removeStream(item);
+            });
+            localMediaStream = stream;
+            localVideo.src = window.URL.createObjectURL(stream);
+            connection.addStream(stream);
+            deferedMedia.resolve();
+        }
+        else
+        {
+            var localVideo = document.querySelector(config.localVideo);
+            localVideo.src = window.URL.createObjectURL(stream);
+            //localVideo.srcObject = stream;
+            localMediaStream = stream;
+            deferedMedia.resolve();
+        }
+       
+    }
+
+    this.onGetRemoteStream = function(e) {
+        var remoteVideo = document.querySelector('video#remoteVideo');
+        console.log("onGetRemoteStream",e.stream.getTracks());
+        remoteVideo.srcObject = e.stream;
+        remoteMediaStream = e.stream;
+    }
+
+    this.onReceiveMessageCallback = function(event) {
+        console.log(event.data);
+    }
+
+    this.createCall = function() {
+        videoUpgrade=false;
+        var mediaReq = self.getUserMedia();
+        var offerOptions = {
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: false
+        };
+        mediaReq.then(function() {
+            self.createPeerConnection();
+            connection.createOffer(gotDescriptionOffer, onCreateSessionDescriptionError, offerOptions);
+        })
+    }
+
+    this.createCallVideoUpgrade = function() {
+        videoUpgrade=true;
+//deferedSDP = $.Deferred();
+        //commented for testing only since without  https getUserMedia wont work
+        var options = {
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+        };
+        var mediaReq = self.getUserMedia(true);
+        mediaReq.then(function() {
+            connection.createOffer(gotDescriptionOffer, onCreateSessionDescriptionError, options);
+        });
+        //return deferedSDP.promise();
+    };
+    this.onGetAnswer = function(sdpAnswer, hasVideo) {
+        var mediaReq = self.getUserMedia(hasVideo);
+        mediaReq.then(function() {
+            var description = new RTCSessionDescription(sdpAnswer);
+            connection.setRemoteDescription(description);
+        });
+    }
+
+    this.onGetOffer = function(sdpOffer) {
+
+        var mediaReq = self.getUserMedia();
+        mediaReq.then(function() {
+            self.createPeerConnection();
+            var description = new RTCSessionDescription(sdpOffer);
+            connection.setRemoteDescription(description);
+            connection.createAnswer(gotDescriptionAnswer, onCreateSessionDescriptionError);
+        });
+    }
+      this.onGetOfferVideoUpgrade = function(sdpOffer,hasVideo) {
+       // deferedSDP = $.Deferred();
+        //commented for testing only since without  https getUserMedia wont work
+        videoUpgrade=true;
+        var mediaReq = self.getUserMedia(true);
+        mediaReq.then(function() {
+            //self.createPeerConnection();
+            //modifySDP(sdpOffer);
+            var description = new RTCSessionDescription(sdpOffer);
+           // Logger.info("WebRTCPeer::onGetOffer","-- Remote description: ", description);
+            connection.setRemoteDescription(description, function() {
+                connection.createAnswer(gotDescriptionAnswer, onCreateSessionDescriptionError);
+            });
+            
+        });
+        //deferedSDP.resolve({sdp:"v=0\r\no=mozilla...THIS_IS_SDPARTA-44.0.2 406984982467935009 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=sendrecv\r\na=fingerprint:sha-256 48:83:23:48:08:85:25:1F:68:5D:8F:33:80:2D:B4:F3:17:77:D4:B7:A5:43:E7:14:38:A7:17:95:F8:8C:BF:94\r\na=ice-options:trickle\r\na=msid-semantic:WMS *\r\nm=audio 59762 UDP/TLS/RTP/SAVPF 109 9 0 8\r\nc=IN IP4 172.18.42.71\r\na=candidate:0 1 UDP 2122252543 172.18.42.71 59762 typ host\r\na=candidate:0 2 UDP 2122252542 172.18.42.71 49734 typ host\r\na=sendrecv\r\na=end-of-candidates\r\na=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\na=ice-pwd:c78316df72e3a738fe9da6703d0b17bf\r\na=ice-ufrag:b66a4851\r\na=mid:sdparta_0\r\na=msid:{2344b9b7-5586-0f4c-8a3d-5879dc34d305} {d7b75ad3-990b-5542-a5fb-abb91f7bd1c1}\r\na=rtcp:49734 IN IP4 172.18.42.71\r\na=rtcp-mux\r\na=rtpmap:109 opus/48000/2\r\na=rtpmap:9 G722/8000/1\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\na=setup:actpass\r\na=ssrc:918949020 cname:{f87b1ed6-73aa-7144-bb8a-5fd6c30915cd}\r\n"});
+        // deferedSDP.promise();
+    };
+    this.close = function() {
+        connection.close();
+        sendDataChannel.close();
+        receiveDataChannel.close();
+        receiveDataChannel = null;
+        sendDataChannel = null;
+        connection = null;
+        isIceCandidateProcessed = false;
+    }
+
+    this.mute = function() {
+        document.getElementById("localVideo").muted = true;
+    }
+
+    this.unmute = function() {
+        document.getElementById("localVideo").muted = false;
+    }
+
+    this.stopVideo = function() {
+        var tracks = localMediaStream.getVideoTracks();
+        for (var i = 0; i < tracks.length; i++) {
+            tracks[i].enabled = false;
+        }
+    }
+
+    this.startVideo = function() {
+        var tracks = localMediaStream.getVideoTracks();
+        for (var i = 0; i < tracks.length; i++) {
+            tracks[i].enabled = true;
+        }
+    }
+
+    function gotDescriptionOffer(description) {
+        connection.setLocalDescription(description);
+        sendSDP('offer',videoUpgrade);
+    }
+
+    function gotDescriptionAnswer(description) {
+        connection.setLocalDescription(description);
+        sendSDP("answer",videoUpgrade);
+    }
+
+    function onCreateSessionDescriptionError() {
+        console.log("Error in creating description");
+    }
+
+    function onSendChannelStateChange() {
+        var readyState = sendDataChannel.readyState;
+        trace('Send channel state is: ' + readyState);
+        if (readyState === 'open') {
+            //todo
+        } else {
+            //todo
+        }
+    }
+
+    function receiveChannelCallback(event) {
+        receiveDataChannel = event.channel;
+        receiveDataChannel.onmessage = self.onReceiveMessageCallback;
+        receiveDataChannel.onopen = function() {};
+        receiveDataChannel.onclose = function() {};
+    }
+
+    function sendSDP(type) {
+        if(!videoUpgrade)
+        {
+
+            var waitTime = setTimeout(function() {
+                if (isIceCandidateProcessed) {
+                    videoUpgrade=true;
+                    console.log('localdescript', connection.localDescription)
+                    clearTimeout(waitTime);
+
+                    sendWithUser(connection.localDescription, type);
+                } else {
+                    clearTimeout(waitTime);
+                    sendSDP(type)
+                }
+            }, 50);
+        }
+        else
+        {
+            sendWithUser(connection.localDescription, type); 
+        }
+    }
+
+    function iceCallback(event) {
+        if (event.candidate) {
+            //todo
+        } else {
+            isIceCandidateProcessed = true;
+        }
+    }
+
+}
+var peer = new WebRTCPeer();
